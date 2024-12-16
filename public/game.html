@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game</title>
+    <style>
+
+        * {
+            padding: 0;
+            margin: 0;
+        }
+        #welcome-message {
+            text-align: center;
+            margin: 20px;
+            font-size: 20px;
+            color: #1a1a1a;
+            
+        }
+        #user-info {
+            margin: 20px;
+            font-size: 18px;
+            color: #333;
+        }
+        .accordion {
+            margin: 20px;
+            font-size: 16px;
+            color: #333;
+            background-color: #f2f2f2;
+        }
+        .accordion-item {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .accordion-header {
+            background-color: #f2f2f2;
+            padding: 10px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .accordion-content {
+            display: none;
+            padding: 10px;
+            border-top: 1px solid #ddd;
+        }
+        .accordion-content table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .accordion-content th, .accordion-content td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="welcome-message"></div>
+    <div id="user-info"></div>
+    <div class="accordion" id="game-records"></div>
+    <div id="game-container">
+        <script src="phaser.min.js"></script>
+        <script>
+            // 获取URL中的用户名参数
+            const urlParams = new URLSearchParams(window.location.search);
+            const username = urlParams.get('username');
+            if (username) {
+                document.getElementById('welcome-message').textContent = `欢迎回来：${username}`;
+                fetchUserInfo(username);
+            }
+
+            function fetchUserInfo(username) {
+                fetch(`http://localhost:3000/getUserInfo?username=${encodeURIComponent(username)}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        displayUserInfo(data.userInfo);
+                        displayGameRecords(data.gameRecords);
+                    })
+                    .catch(error => {
+                        console.error('获取用户信息出错', error);
+                    });
+            }
+
+            function displayUserInfo(userInfo) {
+                const userInfoDiv = document.getElementById('user-info');
+                userInfoDiv.textContent = `用户名：${userInfo.username}`;
+            }
+
+            function displayGameRecords(gameRecords) {
+                const gameRecordsDiv = document.getElementById('game-records');
+                let html = '<div class="accordion-item">';
+                html += '<div class="accordion-header">游戏得分历史记录(点击进行查看)</div>';
+                html += '<div class="accordion-content">';
+                html += '<table>';
+                html += '<tr><th>游戏时间</th><th>游戏得分</th></tr>';
+                gameRecords.forEach(record => {
+                    html += `<tr><td>${record.game_time}</td><td>${record.score}</td></tr>`;
+                });
+                html += '</table>';
+                html += '</div>';
+                html += '</div>';
+                gameRecordsDiv.innerHTML = html;
+
+                // 添加折叠面板的点击事件
+                const headers = document.querySelectorAll('.accordion-header');
+                headers.forEach(header => {
+                    header.addEventListener('click', () => {
+                        const content = header.nextElementSibling;
+                        content.style.display = content.style.display === 'none' ? 'block' : 'none';
+                    });
+                });
+            }
+
+            var game = new Phaser.Game(480, 320, Phaser.AUTO, null, {
+                preload: preload,
+                create: create,
+                update: update,
+            });
+
+            var ball;
+            var newBrick;
+            var brickInfo;
+            var scoreText;
+            var score = 0;
+            var lives = 3;
+            var livesText;
+            var lifeLostText;
+            var playing = false;
+            var startButton;
+            var startTime;
+            var scoreUpdated = false; // 添加标志
+
+            function preload() {
+                game.scale.scaleMode = Phaser.ScaleManager.SHOW_ALL;
+                game.scale.pageAlignHorizontally = true;
+                game.scale.pageAlignVertically = true;
+                game.stage.backgroundColor = '#eee';
+
+                game.load.image('ball', 'ball.png');
+                game.load.image('paddle', 'paddle.png');
+                game.load.image('brick', 'brick.png');
+                game.load.spritesheet('ball', 'wobble.png', 20, 20);
+                game.load.spritesheet('button', 'button.png', 120, 40);
+            }
+
+            function create() {
+                game.physics.startSystem(Phaser.Physics.ARCADE);
+                game.physics.arcade.checkCollision.down = false;
+                ball = game.add.sprite(game.world.width * 0.5, game.world.height - 25, "ball");
+                ball.animations.add('wobble', [0, 1, 0, 2, 0, 1, 0, 2, 0], 24);
+                ball.anchor.set(0.5);
+
+                game.physics.enable(ball, Phaser.Physics.ARCADE);
+                ball.body.collideWorldBounds = true;
+                ball.body.bounce.set(1);
+                ball.checkWorldBounds = true;
+                ball.events.onOutOfBounds.add(ballLeaveScreen, this);
+
+                paddle = game.add.sprite(game.world.width * 0.5, game.world.height - 5, 'paddle');
+                paddle.anchor.set(0.5, 1);
+                game.physics.enable(paddle, Phaser.Physics.ARCADE);
+                paddle.body.immovable = true;
+
+                initBricks();
+
+                textStyle = { font: '18px Arial', fill: '#0095DD' };
+                scoreText = game.add.text(5, 5, "Points: 0", textStyle);
+                livesText = game.add.text(game.world.width - 5, 5, "Lives: " + lives, textStyle);
+                livesText.anchor.set(1, 0);
+                lifeLostText = game.add.text(game.world.width * 0.5, game.world.height * 0.5, "Life lost, try again!", textStyle);
+                lifeLostText.anchor.set(0.5);
+                lifeLostText.visible = false;
+
+                startButton = game.add.button(
+                    game.world.width * 0.5,
+                    game.world.height * 0.5,
+                    'button',
+                    startGame, this, 1, 0, 2
+                );
+                startButton.anchor.set(0.5);
+            }
+
+            function update() {
+                game.physics.arcade.collide(ball, paddle, ballHitPaddle);
+                game.physics.arcade.collide(ball, bricks, ballHitBrick);
+                if (playing) {
+                    paddle.x = game.input.x || game.world.width * 0.5;
+                }
+            }
+
+            function initBricks() {
+                brickInfo = {
+                    width: 50,
+                    height: 20,
+                    count: {
+                        row: 3,
+                        col: 7,
+                    },
+                    offset: {
+                        top: 50,
+                        left: 60,
+                    },
+                    padding: 10,
+                };
+                bricks = game.add.group();
+                const colors = [0xFFB6C1, 0xFFDAB9, 0xFFFFE0];
+                for (var c = 0; c < brickInfo.count.col; c++) {
+                    for (var r = 0; r < brickInfo.count.row; r++) {
+                        const brickX = c * (brickInfo.width + brickInfo.padding) + brickInfo.offset.left;
+                        const brickY = r * (brickInfo.height + brickInfo.padding) + brickInfo.offset.top;
+                        newBrick = game.add.sprite(brickX, brickY, 'brick');
+                        game.physics.enable(newBrick, Phaser.Physics.ARCADE);
+                        newBrick.body.immovable = true;
+                        newBrick.anchor.set(0.5);
+                        newBrick.tint = colors[Math.floor(Math.random() * colors.length)];
+                        bricks.add(newBrick);
+                    }
+                }
+            }
+
+            function ballHitBrick(ball, brick) {
+                var killTween = game.add.tween(brick.scale);
+                killTween.to({ x: 0, y: 0 }, 200, Phaser.Easing.Linear.None);
+                killTween.onComplete.addOnce(function () {
+                    brick.kill();
+                }, this);
+                killTween.start();
+
+                score += 10;
+                scoreText.setText('Points: ' + score);
+
+                var count_alive = 0;
+                for (let i = 0; i < bricks.children.length; i++) {
+                    if (bricks.children[i].alive) {
+                        count_alive++;
+                    }
+                }
+                if (count_alive == 0) {
+                    alert('You won the game, congratulations!');
+                    updateScore();
+                    location.reload();
+                }
+            }
+
+            function ballLeaveScreen() {
+                lives--;
+                if (lives) {
+                    livesText.setText('Lives: ' + lives);
+                    lifeLostText.visible = true;
+                    ball.reset(game.world.width * 0.5, game.world.height - 25);
+                    game.input.onDown.addOnce(function () {
+                        lifeLostText.visible = false;
+                        ball.body.velocity.set(150, -150);
+                    }, this);
+                } else {
+                    alert('You lost the game, try again!');
+                    updateScore();
+                    location.reload();
+                }
+            }
+
+            function ballHitPaddle(ball, paddle) {
+                ball.animations.play('wobble');
+                ball.body.velocity.x = -1 * 5 * (paddle.x - ball.x);
+            }
+
+            function formatDate(date) {
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                const hours = String(date.getHours()).padStart(2, '0');
+                const minutes = String(date.getMinutes()).padStart(2, '0');
+                const seconds = String(date.getSeconds()).padStart(2, '0');
+                return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`;
+            }
+            
+            function startGame() {
+                startButton.destroy();
+                ball.body.velocity.set(150, -150);
+                playing = true;
+                startTime = formatDate(new Date()); // 获取并格式化游戏开始的时间日期
+                scoreUpdated = false; // 重置标志
+            }
+
+            function updateScore() {
+                if (scoreUpdated) return; // 检查标志
+                scoreUpdated = true; // 设置标志
+                fetch('http://localhost:3000/updateScore', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        game_time: startTime,
+                        score: score,
+                    })
+                })
+                .then(response => response.text())
+                .then(result => {
+                    console.log(result);
+                })
+                .catch(error => {
+                    console.error('更新分数出错', error);
+                });
+            }
+        </script>
+    </div>
+</body>
+</html>
